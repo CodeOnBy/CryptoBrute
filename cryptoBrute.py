@@ -1,4 +1,4 @@
-# btc_recover.py
+# btc_recover.py (Version 20 - CLI & Interactive Modes)
 
 # WARNING: This script handles cryptographic keys. Running it on a computer
 # connected to the internet with a real seed phrase is a security risk.
@@ -7,6 +7,7 @@ import sys
 import re
 import requests
 import time
+import argparse
 from datetime import datetime
 from itertools import product
 from bip_utils import (
@@ -25,57 +26,38 @@ PASSPHRASE = ""
 RETRY_COUNT = 3
 BACKOFF_TIME = 30
 WORDLIST = []
-_loaded_wordlist_filename = None # Tracks which wordlist is currently in memory
+_loaded_wordlist_filename = None
 
 settings = {
     "address_count": 5,
-    "sleep_time": 1,
+    "sleep_time": 1.2,
     "wordlist_filename": "english.txt",
-    "api_url": "https://mempool.space/api/address/{}"
+    "api_url": "https://mempool.space/api/address/{}",
+    "mnemonic_length": 12
 }
 
-# --- Helper & Core Logic Functions ---
-
+# --- (Helper & Core Logic functions are mostly unchanged) ---
 def get_wordlist():
-    """
-    Loads or reloads the wordlist from the file specified in settings.
-    Returns the wordlist as a list, or None on failure.
-    """
     global WORDLIST, _loaded_wordlist_filename
-    
-    # Reload if the filename in settings is different from what's loaded
     if settings['wordlist_filename'] != _loaded_wordlist_filename:
         try:
             print(f"\nLoading wordlist from '{settings['wordlist_filename']}'...")
             with open(settings['wordlist_filename'], "r", encoding="utf-8") as f:
                 WORDLIST = [line.strip() for line in f.readlines()]
-            
             if len(WORDLIST) != 2048:
-                print(f"🛑 ERROR: Wordlist must contain exactly 2048 words. Found {len(WORDLIST)}.")
-                _loaded_wordlist_filename = None # Mark as failed
-                WORDLIST = []
-                return None
-            
+                print(f"🛑 ERROR: Wordlist must contain 2048 words. Found {len(WORDLIST)}."); WORDLIST = []; return None
             _loaded_wordlist_filename = settings['wordlist_filename']
             print("Wordlist loaded successfully.")
-
         except FileNotFoundError:
-            print(f"🛑 ERROR: Wordlist file '{settings['wordlist_filename']}' not found.")
-            _loaded_wordlist_filename = None # Mark as failed
-            WORDLIST = []
-            return None
-            
+            print(f"🛑 ERROR: Wordlist file '{settings['wordlist_filename']}' not found."); WORDLIST = []; return None
     return WORDLIST
 
 def check_address_balance(address, path, priv_key_wif, mnemonic):
-    """Checks address balance using the API URL from settings."""
     retries = RETRY_COUNT
     while retries > 0:
         try:
-            # Use the API URL from the settings dictionary
             url = settings['api_url'].format(address)
             response = requests.get(url, timeout=15)
-            
             if response.status_code == 200:
                 print("!", end="", flush=True)
                 data = response.json()
@@ -91,18 +73,15 @@ def check_address_balance(address, path, priv_key_wif, mnemonic):
                     return True
                 return False
             elif response.status_code in [429, 503]:
-                print(f"\n[!] API Warning: Status {response.status_code}. Retrying...")
-                retries -= 1
+                print(f"\n[!] API Warning: Status {response.status_code}. Retrying..."); retries -= 1
                 if retries > 0: time.sleep(BACKOFF_TIME)
             else: return False
         except requests.exceptions.RequestException:
-            print(f"\n[!] Network Error. Retrying...")
-            retries -= 1
+            print(f"\n[!] Network Error. Retrying..."); retries -= 1
             if retries > 0: time.sleep(BACKOFF_TIME)
     return False
 
 def derive_and_check(master_key, description, mnemonic):
-    # Unchanged
     print(f"\n--- Checking {description} ---")
     account_key = master_key.Purpose().Coin().Account(0)
     for change_idx in [0, 1]:
@@ -117,7 +96,6 @@ def derive_and_check(master_key, description, mnemonic):
     return False
 
 def scan_wallet(mnemonic):
-    # Unchanged
     try:
         seed_bytes = Bip39SeedGenerator(mnemonic).Generate(PASSPHRASE)
         bip44_master = Bip44.FromSeed(seed_bytes, Bip44Coins.BITCOIN)
@@ -130,42 +108,37 @@ def scan_wallet(mnemonic):
     except MnemonicChecksumError:
         print("\n" + "="*50 + "\n🛑 ERROR: INVALID SEED PHRASE\n" + "="*50)
 
-# --- Menu Option Functions ---
+# --- Non-Interactive (CLI) Functions ---
 
-def run_single_wallet_check():
-    # Unchanged
-    print("\n--- Import & Check Seed Phrase ---")
-    mnemonic_input = input("Please enter your 12-word seed phrase: ").strip().lower()
-    mnemonic = " ".join(re.split(r'\s+', mnemonic_input))
-    if len(mnemonic.split()) != 12:
-        print("Error: Please enter exactly 12 words."); return
+def run_single_wallet_check_cli(mnemonic):
+    words = mnemonic.split()
+    if len(words) not in [12, 18, 24]:
+        print(f"Error: Seed phrase must have 12, 18, or 24 words. Provided: {len(words)}.")
+        return
     scan_wallet(mnemonic)
 
-def run_full_brute_force_hunter():
-    # Unchanged, but now only called by the partial brute-force function
-    print("\n--- Full Random Mnemonic Hunter ---")
-    print("🚨 WARNING: Success is statistically impossible.")
+def run_full_brute_force_hunter_cli():
+    length = settings['mnemonic_length']
+    print(f"\n--- Full Random {length}-Word Mnemonic Hunter ---")
+    print("🚨 WARNING: Success is statistically impossible. Press CTRL+C to stop.")
+    length_map = {12: Bip39WordsNum.WORDS_NUM_12, 18: Bip39WordsNum.WORDS_NUM_18, 24: Bip39WordsNum.WORDS_NUM_24}
+    words_num_enum = length_map[length]
     wallets_checked = 0
     generator = Bip39MnemonicGenerator()
     while True:
-        mnemonic = generator.FromWordsNumber(Bip39WordsNum.WORDS_NUM_12).ToStr()
-        print(f"\n{'='*60}\n#{wallets_checked + 1} | Scanning: '{mnemonic}'")
+        mnemonic = generator.FromWordsNumber(words_num_enum).ToStr()
+        print(f"\n{'='*60}\n#{wallets_checked + 1} | Scanning {length}-word: '{mnemonic}'")
         if scan_wallet(mnemonic):
             print("Target found! Shutting down hunter."); sys.exit()
         wallets_checked += 1
 
-def run_partial_brute_force():
-    # Updated to use get_wordlist()
-    print("\n--- Brute-Force Partial Seed Phrase ---")
-    print("Enter your seed phrase template using '?' for unknown words.")
-    template_input = input("> ").strip().lower()
+def run_partial_brute_force_cli(template):
+    if template == '?':
+        run_full_brute_force_hunter_cli(); return
 
-    if template_input == '?':
-        run_full_brute_force_hunter(); return
-
-    template_list = re.split(r'\s+', template_input)
-    if len(template_list) != 12:
-        print("Error: Template must contain exactly 12 words/placeholders."); return
+    template_list = template.split()
+    if len(template_list) not in [12, 18, 24]:
+        print(f"Error: Template must be 12, 18, or 24 words/placeholders long. Provided: {len(template_list)}."); return
 
     current_wordlist = get_wordlist()
     if not current_wordlist:
@@ -178,19 +151,14 @@ def run_partial_brute_force():
         scan_wallet(" ".join(template_list)); return
         
     total_combinations = len(current_wordlist) ** num_unknowns
-    print(f"\nFound {num_unknowns} unknown word(s). This will generate {total_combinations:,} mnemonics.")
+    print(f"\nFound {num_unknowns} unknown word(s), generating {total_combinations:,} mnemonics.")
     
-    if total_combinations > 1000000:
-        if input("This could take a very long time. Continue? (yes/no): ").lower() != 'yes':
-            print("Aborting."); return
-
     combinations_generator = product(current_wordlist, repeat=num_unknowns)
     checked_count = 0
     for combo in combinations_generator:
         temp_mnemonic_list = list(template_list)
         for i, word in enumerate(combo):
             temp_mnemonic_list[brute_force_indices[i]] = word
-        
         mnemonic_to_check = " ".join(temp_mnemonic_list)
         checked_count += 1
         print(f"\rChecked: {checked_count:,} / {total_combinations:,}", end="")
@@ -198,22 +166,23 @@ def run_partial_brute_force():
             Bip39SeedGenerator(mnemonic_to_check)
             print(f"\n[+] Valid Checksum Found for: {mnemonic_to_check}")
             if scan_wallet(mnemonic_to_check):
-                print("\nSUCCESS! A wallet with a balance was found from your template!"); sys.exit()
+                print("\nSUCCESS! A wallet with a balance was found!"); sys.exit()
         except MnemonicChecksumError: continue
-    
     print(f"\n\nPartial brute-force complete. Checked all {total_combinations:,} combinations.")
 
-def run_settings_menu():
-    """Handles the settings menu, now with more options."""
+# --- Interactive Menu Functions ---
+
+def run_settings_menu_interactive():
     while True:
         print("\n" + "="*40 + "\n            Settings Menu\n" + "="*40)
         print(f"1) Address Count (Gap Limit): {settings['address_count']}")
         print(f"2) API Sleep Time (seconds):  {settings['sleep_time']}")
         print(f"3) Wordlist File:             {settings['wordlist_filename']}")
         print(f"4) API URL:                   {settings['api_url']}")
-        print("5) Back to Main Menu")
+        print(f"5) Mnemonic Length (for hunter): {settings['mnemonic_length']} words")
+        print("6) Back to Main Menu")
         print("="*40)
-        choice = input("Enter your choice (1-5): ").strip()
+        choice = input("Enter your choice (1-6): ").strip()
         if choice == '1':
             try:
                 new_count = int(input(f"Enter new address count > ").strip())
@@ -233,37 +202,82 @@ def run_settings_menu():
             print("Enter new API URL. Use '{}' as the placeholder for the address.")
             new_url = input(f"> ").strip()
             if '{}' not in new_url:
-                print("Warning: API URL does not contain '{}'. It may not work correctly.")
+                print("Warning: API URL does not contain '{}'.")
             if new_url: settings['api_url'] = new_url
         elif choice == '5':
-            break
-        else:
-            print("Invalid choice.")
+            try:
+                new_length = int(input("Enter new mnemonic length (12, 18, or 24) > ").strip())
+                if new_length in [12, 18, 24]: settings['mnemonic_length'] = new_length
+                else: print("Error: Please enter 12, 18, or 24.")
+            except ValueError: print("Error: Invalid input.")
+        elif choice == '6': break
+        else: print("Invalid choice.")
 
-# --- Main Menu ---
-
-def main():
-    """Main function to display the streamlined menu."""
+def main_menu():
     while True:
-        print("\n" + "="*30 + "\n   Bitcoin Wallet Recovery\n" + "="*30)
+        print("\n" + "="*30 + "\n   Crypto Brute Menu\n" + "="*30)
         print("1) Import & Check Seed Phrase")
-        print("2) Brute-Force Partial Phrase")
+        print("2) Brute-Force Partial Seed Phrase")
         print("3) Settings")
         print("4) Exit")
         print("="*30)
-        
         choice = input("Enter your choice (1-4): ").strip()
-        
         if choice == '1':
-            run_single_wallet_check(); input("\nPress Enter to return...")
+            run_single_wallet_check_cli(" ".join(input("Please enter your seed phrase: ").strip().lower().split()))
+            input("\nPress Enter to return...")
         elif choice == '2':
-            run_partial_brute_force(); input("\nPress Enter to return...")
+            run_partial_brute_force_cli(" ".join(input("Enter your seed phrase template with '?': ").strip().lower().split()))
+            input("\nPress Enter to return...")
         elif choice == '3':
-            run_settings_menu()
+            run_settings_menu_interactive()
         elif choice == '4':
             print("Exiting. Thank you!"); break
         else:
             print("Invalid choice.")
+
+# --- Main Entry Point: CLI or Interactive ---
+
+def main():
+    if len(sys.argv) > 1:
+        # --- CLI Mode ---
+        parser = argparse.ArgumentParser(description="Crypto Wallet Recovery and Brute-Force Tool.")
+        subparsers = parser.add_subparsers(dest='command', required=True, help='Available commands')
+
+        # Generic settings arguments for all commands
+        def add_common_args(p):
+            p.add_argument('-c', '--address-count', type=int, help=f"Number of addresses to check per wallet (default: {settings['address_count']})")
+            p.add_argument('-s', '--sleep-time', type=float, help=f"Seconds to sleep between API calls (default: {settings['sleep_time']})")
+            p.add_argument('-w', '--wordlist', type=str, help=f"Path to the BIP39 wordlist file (default: {settings['wordlist_filename']})")
+            p.add_argument('-a', '--api-url', type=str, help=f"API URL for balance checks (default: {settings['api_url']})")
+
+        # 'check' command
+        parser_check = subparsers.add_parser('check', help='Check a single, complete seed phrase.')
+        parser_check.add_argument('seed_phrase', nargs='+', help='The 12, 18, or 24-word seed phrase.')
+        add_common_args(parser_check)
+
+        # 'brute' command
+        parser_brute = subparsers.add_parser('brute', help="Brute-force a partial seed phrase using '?' as a placeholder.")
+        parser_brute.add_argument('template', nargs='+', help="The seed phrase template. Use '?' for the full random hunter.")
+        add_common_args(parser_brute)
+        
+        args = parser.parse_args()
+
+        # Override default settings with any provided CLI arguments
+        if args.address_count is not None: settings['address_count'] = args.address_count
+        if args.sleep_time is not None: settings['sleep_time'] = args.sleep_time
+        if args.wordlist is not None: settings['wordlist_filename'] = args.wordlist
+        if args.api_url is not None: settings['api_url'] = args.api_url
+
+        # Execute command
+        if args.command == 'check':
+            mnemonic = " ".join(args.seed_phrase)
+            run_single_wallet_check_cli(mnemonic)
+        elif args.command == 'brute':
+            template = " ".join(args.template)
+            run_partial_brute_force_cli(template)
+    else:
+        # --- Interactive Mode ---
+        main_menu()
 
 if __name__ == "__main__":
     main()
