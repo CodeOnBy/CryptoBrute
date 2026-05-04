@@ -1,24 +1,43 @@
-# cryptoBrute.py (Version 21 - Output File & Silent Mode)
+# CryptoBrute
+# codeonbyte.com
+
+# --- Dependency Check ---
+# This block checks for required libraries at the very beginning.
+try:
+    import sys
+    import re
+    import requests
+    import time
+    import argparse
+    from datetime import datetime
+    from itertools import product
+    from bip_utils import (
+        Bip39SeedGenerator,
+        Bip39MnemonicGenerator,
+        Bip39WordsNum,
+        Bip44, Bip44Coins, Bip44Changes,
+        Bip49, Bip49Coins,
+        Bip84, Bip84Coins
+    )
+    from bip_utils.utils.mnemonic.mnemonic_ex import MnemonicChecksumError
+except ImportError as e:
+    missing_library = e.name
+    pip_package_map = {
+        "requests": "requests",
+        "bip_utils": "bip-utils" # Note the hyphen for pip
+    }
+    package_name = pip_package_map.get(missing_library, missing_library)
+    print("="*60)
+    print(f"🛑 Error: A required library is missing: '{missing_library}'")
+    print(f"   Please install it by running the following command:")
+    print(f"   pip install {package_name}")
+    print("="*60)
+    sys.exit(1)
+# --- End of Dependency Check ---
+
 
 # WARNING: This script handles cryptographic keys. Running it on a computer
 # connected to the internet with a real seed phrase is a security risk.
-
-import sys
-import re
-import requests
-import time
-import argparse
-from datetime import datetime
-from itertools import product
-from bip_utils import (
-    Bip39SeedGenerator,
-    Bip39MnemonicGenerator,
-    Bip39WordsNum,
-    Bip44, Bip44Coins, Bip44Changes,
-    Bip49, Bip49Coins,
-    Bip84, Bip84Coins
-)
-from bip_utils.utils.mnemonic.mnemonic_ex import MnemonicChecksumError
 
 # --- Global Configuration & Settings ---
 PASSPHRASE = ""
@@ -28,16 +47,16 @@ WORDLIST = []
 _loaded_wordlist_filename = None
 
 settings = {
-    "address_count": 20,
-    "sleep_time": 0.2,
+    "address_count": 5,
+    "sleep_time": 1.2,
     "wordlist_filename": "english.txt",
     "api_url": "https://mempool.space/api/address/{}",
     "mnemonic_length": 12,
-    "output_file": "found.txt",  # New setting
-    "silent_mode": False          # New setting
+    "output_file": "found.txt",
+    "silent_mode": False
 }
 
-# --- Helper & Core Logic Functions ---
+# --- (The rest of the script is identical to Version 21) ---
 
 def get_wordlist():
     global WORDLIST, _loaded_wordlist_filename
@@ -68,7 +87,6 @@ def check_address_balance(address, path, priv_key_wif, mnemonic):
                 balance_sats = data['chain_stats']['funded_txo_sum'] - data['chain_stats']['spent_txo_sum']
                 if balance_sats > 0:
                     balance_btc = balance_sats / 100_000_000
-                    # This success message is essential and will NOT be silenced.
                     print(f"\n\n{'!'*20} SUCCESS! WALLET WITH BALANCE FOUND! {'!'*20}")
                     with open(settings['output_file'], "a") as f:
                         f.write(f"{'='*60}\nTimestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -106,8 +124,6 @@ def derive_and_check(master_key, description, mnemonic):
 def scan_wallet(mnemonic):
     try:
         seed_bytes = Bip39SeedGenerator(mnemonic).Generate(PASSPHRASE)
-        if not settings['silent_mode']:
-            print("A '!' will be printed for each successful address check.")
         bip44_master = Bip44.FromSeed(seed_bytes, Bip44Coins.BITCOIN)
         if derive_and_check(bip44_master, "Legacy (BIP44)", mnemonic): return True
         bip49_master = Bip49.FromSeed(seed_bytes, Bip49Coins.BITCOIN)
@@ -118,8 +134,6 @@ def scan_wallet(mnemonic):
             print("\nScan complete. No balance found for this seed phrase.")
     except MnemonicChecksumError:
         print("\n" + "="*50 + "\n🛑 ERROR: INVALID SEED PHRASE\n" + "="*50)
-
-# --- Non-Interactive (CLI) Functions ---
 
 def run_single_wallet_check_cli(mnemonic):
     words = mnemonic.split()
@@ -186,8 +200,6 @@ def run_partial_brute_force_cli(template):
     if not settings['silent_mode']:
         print(f"\n\nPartial brute-force complete. Checked all {total_combinations:,} combinations.")
 
-# --- Interactive Menu Functions ---
-
 def run_settings_menu_interactive():
     while True:
         silent_status = "On" if settings['silent_mode'] else "Off"
@@ -235,7 +247,7 @@ def run_settings_menu_interactive():
 
 def main_menu():
     while True:
-        print("\n" + "="*30 + "\n   Bitcoin Wallet Tool Menu\n" + "="*30)
+        print("\n" + "="*30 + "\n   CryptoBrute Tool Menu\n" + "="*30)
         print("1) Import & Check Seed Phrase")
         print("2) Brute-Force Partial Seed Phrase")
         print("3) Settings")
@@ -255,11 +267,9 @@ def main_menu():
         else:
             print("Invalid choice.")
 
-# --- Main Entry Point: CLI or Interactive ---
-
 def main():
     if len(sys.argv) > 1:
-        parser = argparse.ArgumentParser(description="Bitcoin Wallet Recovery and Brute-Force Tool.")
+        parser = argparse.ArgumentParser(description="CryptoBrute Recovery and Brute-Force Tool.")
         subparsers = parser.add_subparsers(dest='command', required=True, help='Available commands')
 
         def add_common_args(p):
