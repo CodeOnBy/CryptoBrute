@@ -2,42 +2,19 @@
 # codeonbyte.com
 
 # --- Dependency Check ---
-# This block checks for required libraries at the very beginning.
 try:
-    import sys
-    import re
-    import requests
-    import time
-    import argparse
+    import sys, re, requests, time, argparse
     from datetime import datetime
     from itertools import product
-    from bip_utils import (
-        Bip39SeedGenerator,
-        Bip39MnemonicGenerator,
-        Bip39WordsNum,
-        Bip44, Bip44Coins, Bip44Changes,
-        Bip49, Bip49Coins,
-        Bip84, Bip84Coins
-    )
+    from bip_utils import *
     from bip_utils.utils.mnemonic.mnemonic_ex import MnemonicChecksumError
 except ImportError as e:
-    missing_library = e.name
-    pip_package_map = {
-        "requests": "requests",
-        "bip_utils": "bip-utils" # Note the hyphen for pip
-    }
-    package_name = pip_package_map.get(missing_library, missing_library)
-    print("="*60)
-    print(f"🛑 Error: A required library is missing: '{missing_library}'")
-    print(f"   Please install it by running the following command:")
-    print(f"   pip install {package_name}")
-    print("="*60)
+    pip_package_map = {"requests": "requests", "bip_utils": "bip-utils"}
+    package_name = pip_package_map.get(e.name, e.name)
+    print(f"{'='*60}\n🛑 Error: A required library is missing: '{e.name}'")
+    print(f"   Please install it by running: pip install {package_name}\n{'='*60}")
     sys.exit(1)
 # --- End of Dependency Check ---
-
-
-# WARNING: This script handles cryptographic keys. Running it on a computer
-# connected to the internet with a real seed phrase is a security risk.
 
 # --- Global Configuration & Settings ---
 PASSPHRASE = ""
@@ -53,26 +30,37 @@ settings = {
     "api_url": "https://mempool.space/api/address/{}",
     "mnemonic_length": 12,
     "output_file": "found.txt",
-    "silent_mode": False
+    "silent_mode": False,
+    "timestamps_enabled": False # New setting
 }
 
-# --- (The rest of the script is identical to Version 21) ---
+# --- New Centralized Logging Function ---
+def log_message(message):
+    """Prints a message, prepending a timestamp if enabled."""
+    if settings['silent_mode']:
+        return
+    
+    if settings['timestamps_enabled']:
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"[{timestamp}] {message}")
+    else:
+        print(message)
+
+# --- (Core logic functions updated to use log_message) ---
 
 def get_wordlist():
     global WORDLIST, _loaded_wordlist_filename
     if settings['wordlist_filename'] != _loaded_wordlist_filename:
         try:
-            if not settings['silent_mode']:
-                print(f"\nLoading wordlist from '{settings['wordlist_filename']}'...")
+            log_message(f"Loading wordlist from '{settings['wordlist_filename']}'...")
             with open(settings['wordlist_filename'], "r", encoding="utf-8") as f:
                 WORDLIST = [line.strip() for line in f.readlines()]
             if len(WORDLIST) != 2048:
-                print(f"🛑 ERROR: Wordlist must contain 2048 words. Found {len(WORDLIST)}."); WORDLIST = []; return None
+                log_message(f"🛑 ERROR: Wordlist must contain 2048 words. Found {len(WORDLIST)}."); WORDLIST = []; return None
             _loaded_wordlist_filename = settings['wordlist_filename']
-            if not settings['silent_mode']:
-                print("Wordlist loaded successfully.")
+            log_message("Wordlist loaded successfully.")
         except FileNotFoundError:
-            print(f"🛑 ERROR: Wordlist file '{settings['wordlist_filename']}' not found."); WORDLIST = []; return None
+            log_message(f"🛑 ERROR: Wordlist file '{settings['wordlist_filename']}' not found."); WORDLIST = []; return None
     return WORDLIST
 
 def check_address_balance(address, path, priv_key_wif, mnemonic):
@@ -87,6 +75,7 @@ def check_address_balance(address, path, priv_key_wif, mnemonic):
                 balance_sats = data['chain_stats']['funded_txo_sum'] - data['chain_stats']['spent_txo_sum']
                 if balance_sats > 0:
                     balance_btc = balance_sats / 100_000_000
+                    # This success message is essential and will not be silenced or use log_message to keep it clean.
                     print(f"\n\n{'!'*20} SUCCESS! WALLET WITH BALANCE FOUND! {'!'*20}")
                     with open(settings['output_file'], "a") as f:
                         f.write(f"{'='*60}\nTimestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -96,18 +85,18 @@ def check_address_balance(address, path, priv_key_wif, mnemonic):
                     return True
                 return False
             elif response.status_code in [429, 503]:
-                if not settings['silent_mode']: print(f"\n[!] API Warning: Status {response.status_code}. Retrying...")
+                log_message(f"\n[!] API Warning: Status {response.status_code}. Retrying...")
                 retries -= 1
                 if retries > 0: time.sleep(BACKOFF_TIME)
             else: return False
         except requests.exceptions.RequestException:
-            if not settings['silent_mode']: print(f"\n[!] Network Error. Retrying...")
+            log_message(f"\n[!] Network Error. Retrying...")
             retries -= 1
             if retries > 0: time.sleep(BACKOFF_TIME)
     return False
 
 def derive_and_check(master_key, description, mnemonic):
-    if not settings['silent_mode']: print(f"\n--- Checking {description} ---")
+    log_message(f"--- Checking {description} ---")
     account_key = master_key.Purpose().Coin().Account(0)
     for change_idx in [0, 1]:
         change_key = account_key.Change(Bip44Changes.CHAIN_EXT if change_idx == 0 else Bip44Changes.CHAIN_INT)
@@ -130,8 +119,7 @@ def scan_wallet(mnemonic):
         if derive_and_check(bip49_master, "Nested SegWit (BIP49)", mnemonic): return True
         bip84_master = Bip84.FromSeed(seed_bytes, Bip84Coins.BITCOIN)
         if derive_and_check(bip84_master, "Native SegWit (BIP84)", mnemonic): return True
-        if not settings['silent_mode']:
-            print("\nScan complete. No balance found for this seed phrase.")
+        log_message("Scan complete. No balance found for this seed phrase.")
     except MnemonicChecksumError:
         print("\n" + "="*50 + "\n🛑 ERROR: INVALID SEED PHRASE\n" + "="*50)
 
@@ -144,17 +132,17 @@ def run_single_wallet_check_cli(mnemonic):
 
 def run_full_brute_force_hunter_cli():
     length = settings['mnemonic_length']
-    if not settings['silent_mode']:
-        print(f"\n--- Full Random {length}-Word Mnemonic Hunter ---")
-        print("🚨 WARNING: Success is statistically impossible. Press CTRL+C to stop.")
+    log_message(f"--- Full Random {length}-Word Mnemonic Hunter ---")
+    log_message("🚨 WARNING: Success is statistically impossible. Press CTRL+C to stop.")
     length_map = {12: Bip39WordsNum.WORDS_NUM_12, 18: Bip39WordsNum.WORDS_NUM_18, 24: Bip39WordsNum.WORDS_NUM_24}
     words_num_enum = length_map[length]
     wallets_checked = 0
     generator = Bip39MnemonicGenerator()
     while True:
         mnemonic = generator.FromWordsNumber(words_num_enum).ToStr()
-        if not settings['silent_mode']:
-            print(f"\n{'='*60}\n#{wallets_checked + 1} | Scanning {length}-word: '{mnemonic}'")
+        print(f"\n{'='*80}")
+        log_message(f"#{wallets_checked + 1} | Scanning {length}-word: '{mnemonic}'")
+        print(f"{'='*80}")
         if scan_wallet(mnemonic):
             print("Target found! Shutting down hunter."); sys.exit()
         wallets_checked += 1
@@ -177,8 +165,7 @@ def run_partial_brute_force_cli(template):
         scan_wallet(" ".join(template_list)); return
     
     total_combinations = len(current_wordlist) ** num_unknowns
-    if not settings['silent_mode']:
-        print(f"\nFound {num_unknowns} unknown word(s), generating {total_combinations:,} mnemonics.")
+    log_message(f"Found {num_unknowns} unknown word(s), generating {total_combinations:,} mnemonics.")
     
     combinations_generator = product(current_wordlist, repeat=num_unknowns)
     checked_count = 0
@@ -192,17 +179,16 @@ def run_partial_brute_force_cli(template):
             print(f"\rChecked: {checked_count:,} / {total_combinations:,}", end="")
         try:
             Bip39SeedGenerator(mnemonic_to_check)
-            if not settings['silent_mode']:
-                print(f"\n[+] Valid Checksum Found for: {mnemonic_to_check}")
+            log_message(f"\n[+] Valid Checksum Found for: {mnemonic_to_check}")
             if scan_wallet(mnemonic_to_check):
                 print("\nSUCCESS! A wallet with a balance was found!"); sys.exit()
         except MnemonicChecksumError: continue
-    if not settings['silent_mode']:
-        print(f"\n\nPartial brute-force complete. Checked all {total_combinations:,} combinations.")
+    log_message(f"\nPartial brute-force complete. Checked all {total_combinations:,} combinations.")
 
 def run_settings_menu_interactive():
     while True:
         silent_status = "On" if settings['silent_mode'] else "Off"
+        timestamp_status = "On" if settings['timestamps_enabled'] else "Off"
         print("\n" + "="*45 + "\n                  Settings Menu\n" + "="*45)
         print(f"1) Address Count (Gap Limit)      : {settings['address_count']}")
         print(f"2) API Sleep Time (seconds)         : {settings['sleep_time']}")
@@ -211,9 +197,10 @@ def run_settings_menu_interactive():
         print(f"5) Mnemonic Length (for hunter)     : {settings['mnemonic_length']} words")
         print(f"6) Output File                      : {settings['output_file']}")
         print(f"7) Silent Mode                      : {silent_status}")
-        print("8) Back to Main Menu")
+        print(f"8) Enable Timestamps                : {timestamp_status}")
+        print("9) Back to Main Menu")
         print("="*45)
-        choice = input("Enter your choice (1-8): ").strip()
+        choice = input("Enter your choice (1-9): ").strip()
 
         if choice == '1':
             try:
@@ -242,7 +229,10 @@ def run_settings_menu_interactive():
         elif choice == '7':
             settings['silent_mode'] = not settings['silent_mode']
             print(f"Silent mode is now {'On' if settings['silent_mode'] else 'Off'}.")
-        elif choice == '8': break
+        elif choice == '8':
+            settings['timestamps_enabled'] = not settings['timestamps_enabled']
+            print(f"Timestamps are now {'On' if settings['timestamps_enabled'] else 'Off'}.")
+        elif choice == '9': break
         else: print("Invalid choice.")
 
 def main_menu():
@@ -269,7 +259,7 @@ def main_menu():
 
 def main():
     if len(sys.argv) > 1:
-        parser = argparse.ArgumentParser(description="CryptoBrute Recovery and Brute-Force Tool.")
+        parser = argparse.ArgumentParser(description="A tool for Bitcoin wallet recovery and brute-force operations.")
         subparsers = parser.add_subparsers(dest='command', required=True, help='Available commands')
 
         def add_common_args(p):
@@ -279,6 +269,7 @@ def main():
             p.add_argument('-a', '--api-url', type=str, help=f"API URL for balance checks (default: {settings['api_url']})")
             p.add_argument('-o', '--output-file', type=str, help=f"File to save found wallets (default: {settings['output_file']})")
             p.add_argument('--silent', action='store_true', help="Suppress progress output, only show results.")
+            p.add_argument('--timestamps', action='store_true', help="Enable timestamps for major operations.")
 
         parser_check = subparsers.add_parser('check', help='Check a single, complete seed phrase.')
         parser_check.add_argument('seed_phrase', nargs='+', help='The 12, 18, or 24-word seed phrase.')
@@ -297,6 +288,7 @@ def main():
         if args.api_url is not None: settings['api_url'] = args.api_url
         if args.output_file is not None: settings['output_file'] = args.output_file
         if args.silent: settings['silent_mode'] = True
+        if args.timestamps: settings['timestamps_enabled'] = True
         if hasattr(args, 'length') and args.length is not None: settings['mnemonic_length'] = args.length
 
         if args.command == 'check':
